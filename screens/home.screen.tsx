@@ -20,7 +20,7 @@ import * as ImagePicker from "expo-image-picker";
 // Services
 import { transcribeAudio, generateContent, analyzeImage } from "@/services/api/gemini";
 import { startRecording as startAudioRecording, stopRecording as stopAudioRecording } from "@/services/audio/recorder";
-import { speakText, defaultSpeechOptions } from "@/services/audio/speech";
+import { speakText, defaultSpeechOptions, stopSpeaking } from "@/services/audio/speech";
 
 // Components
 import RecordingButton from "@/components/AIAssistant/RecordingButton";
@@ -31,6 +31,8 @@ interface ConversationMessage {
   parts: { text: string }[];
   hasImage?: boolean;
   imageUri?: string;
+  isSpeaking?: boolean;
+  messageId: string;
 }
 
 export default function HomeScreen() {
@@ -48,6 +50,7 @@ export default function HomeScreen() {
   const [history, setHistory] = useState<ConversationMessage[]>([]);
   const scrollViewRef = useRef<ScrollView>(null);
   const inputRef = useRef<TextInput>(null);
+  const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null);
 
   // Keyboard listeners
   useEffect(() => {
@@ -118,7 +121,8 @@ export default function HomeScreen() {
       // Create user message placeholder
       const userMessage: ConversationMessage = {
         role: "user",
-        parts: [{ text: "🎤 Voice message" }]
+        parts: [{ text: "🎤 Voice message" }],
+        messageId: Date.now().toString()
       };
 
       // Update history with user's message
@@ -134,13 +138,11 @@ export default function HomeScreen() {
         if (response.text) {
           const aiMessage: ConversationMessage = {
             role: "model",
-            parts: [{ text: response.text }]
+            parts: [{ text: response.text }],
+            messageId: Date.now().toString()
           };
           setHistory([...newHistory, aiMessage]);
           setText(response.text);
-
-          // Speak the response
-          await handleSpeakResponse(response.text);
         }
       }
 
@@ -149,6 +151,49 @@ export default function HomeScreen() {
       console.error("Recording process error:", error);
       setLoading(false);
       Alert.alert("Error", "Failed to process recording");
+    }
+  };
+
+  /**
+   * Handle speaking a specific message
+   */
+  const handleSpeakMessage = async (messageId: string, text: string) => {
+    try {
+      // If already speaking this message, stop it
+      if (speakingMessageId === messageId) {
+        await stopSpeaking();
+        setAISpeaking(false);
+        setSpeakingMessageId(null);
+        return;
+      }
+
+      // If speaking another message, stop it first
+      if (speakingMessageId) {
+        await stopSpeaking();
+        setAISpeaking(false);
+        setSpeakingMessageId(null);
+      }
+
+      // Start speaking the new message
+      setSpeakingMessageId(messageId);
+      setAISpeaking(true);
+
+      await speakText(text, {
+        ...defaultSpeechOptions,
+        onDone: () => {
+          setAISpeaking(false);
+          setSpeakingMessageId(null);
+        },
+        onError: (error) => {
+          console.error("Speech error:", error);
+          setAISpeaking(false);
+          setSpeakingMessageId(null);
+        }
+      });
+    } catch (error) {
+      console.error("Speech control error:", error);
+      setAISpeaking(false);
+      setSpeakingMessageId(null);
     }
   };
 
@@ -173,7 +218,8 @@ export default function HomeScreen() {
           role: "user",
           parts: [{ text: inputText.trim() || "Describe this image" }],
           hasImage: true,
-          imageUri: selectedImage
+          imageUri: selectedImage,
+          messageId: Date.now().toString()
         };
 
         // Update history with user's message
@@ -194,7 +240,8 @@ export default function HomeScreen() {
         // Text-only message
         userMessage = {
           role: "user",
-          parts: [{ text: inputText.trim() }]
+          parts: [{ text: inputText.trim() }],
+          messageId: Date.now().toString()
         };
 
         // Update history with user's message
@@ -210,18 +257,15 @@ export default function HomeScreen() {
       setInputText("");
 
       if (!response.error) {
-        // Update UI with AI's response
         if (response.text) {
           const aiMessage: ConversationMessage = {
             role: "model",
-            parts: [{ text: response.text }]
+            parts: [{ text: response.text }],
+            messageId: Date.now().toString()
           };
 
           setHistory(prev => [...prev, aiMessage]);
           setText(response.text);
-
-          // Speak the response
-          await handleSpeakResponse(response.text);
         }
       }
 
@@ -330,35 +374,20 @@ export default function HomeScreen() {
       if (response.text) {
         const aiMessage: ConversationMessage = {
           role: "model",
-          parts: [{ text: response.text }]
+          parts: [{ text: response.text }],
+          messageId: Date.now().toString()
         };
         setHistory([...newHistory, aiMessage]);
         setText(response.text);
         setLoading(false);
 
-        await handleSpeakResponse(response.text);
+        await handleSpeakMessage(aiMessage.messageId, response.text);
       }
     } catch (error) {
       console.error("Generate response error:", error);
       setLoading(false);
       Alert.alert("Error", "Failed to generate response");
     }
-  };
-
-  /**
-   * Speak the AI response
-   */
-  const handleSpeakResponse = async (responseText: string) => {
-    setAISpeaking(true);
-
-    await speakText(responseText, {
-      ...defaultSpeechOptions,
-      onDone: () => setAISpeaking(false),
-      onError: (error) => {
-        console.error("Speech error:", error);
-        setAISpeaking(false);
-      }
-    });
   };
 
   /**
@@ -496,6 +525,21 @@ export default function HomeScreen() {
                         <Text className="text-white text-base leading-relaxed">
                           {message.parts[0].text}
                         </Text>
+                        {message.role === 'model' && (
+                          <TouchableOpacity
+                            onPress={() => handleSpeakMessage(message.messageId, message.parts[0].text)}
+                            className="mt-2 flex-row items-center"
+                          >
+                            <Ionicons
+                              name={speakingMessageId === message.messageId ? "stop-circle-outline" : "play-circle-outline"}
+                              size={24}
+                              color={speakingMessageId === message.messageId ? "#ef4444" : "#818cf8"}
+                            />
+                            <Text className="text-gray-400 text-sm ml-2">
+                              {speakingMessageId === message.messageId ? "Stop" : "Play"}
+                            </Text>
+                          </TouchableOpacity>
+                        )}
                       </View>
                     </View>
                   ))}

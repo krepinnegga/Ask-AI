@@ -17,12 +17,14 @@ export interface SpeechOptions {
 /**
  * Default speech options
  */
-export const defaultSpeechOptions: SpeechOptions = {
+export const defaultSpeechOptions = {
   voice: "com.apple.ttsbundle.Samantha-compact",
-  language: "en-US",
-  pitch: 1.5,
-  rate: 1,
+  language: 'en',
+  pitch: 1.0,
+  rate: 0.9,
 };
+
+let isSpeaking = false;
 
 /**
  * Convert text to speech
@@ -31,25 +33,51 @@ export const defaultSpeechOptions: SpeechOptions = {
  */
 export const speakText = async (
   text: string,
-  options: SpeechOptions = defaultSpeechOptions
+  options?: Speech.SpeechOptions
 ): Promise<void> => {
   try {
-    Speech.speak(text, options as Speech.SpeechOptions);
+    // Stop any ongoing speech
+    if (isSpeaking) {
+      await Speech.stop();
+      isSpeaking = false;
+    }
+
+    // Start new speech
+    isSpeaking = true;
+    await Speech.speak(text, {
+      ...defaultSpeechOptions,
+      ...options,
+      onStart: () => {
+        options?.onStart?.();
+      },
+      onDone: () => {
+        isSpeaking = false;
+        options?.onDone?.();
+      },
+      onError: (error) => {
+        isSpeaking = false;
+        options?.onError?.(error);
+      },
+    });
   } catch (error) {
     console.error("Speech error:", error);
-    if (options.onError) {
-      options.onError(error instanceof Error ? error : new Error(String(error)));
-    }
+    isSpeaking = false;
+    throw error;
   }
 };
 
 /**
  * Stop all speech
  */
-export const stopSpeaking = (): void => {
+export const stopSpeaking = async (): Promise<void> => {
   try {
-    Speech.stop();
+    if (isSpeaking) {
+      await Speech.stop();
+      isSpeaking = false;
+    }
   } catch (error) {
     console.error("Stop speech error:", error);
+    isSpeaking = false;
+    throw error;
   }
 };
